@@ -120,7 +120,7 @@ class DownloadFaces:
                         print 'Downloading :' + person + ',pic ID :' + str(int(lineNumStr)) + ',volume used: ' + str(volume_used)
                         lineInfo = line[0].split(' ')# 0 == picID, 1 == url, 2,3,4,5 == left,top,right,bottom
                         print lineInfo
-                        result = self.processImage(person, lineInfo[0], lineInfo[1], lineInfo[2], lineInfo[3], lineInfo[4], lineInfo[5])
+                        result = self.processImage(lineNumStr, person, lineInfo[0], lineInfo[1], lineInfo[2], lineInfo[3], lineInfo[4], lineInfo[5])
                         if result == -1:
                             splited = line[0].split(' ')
                             toLog = []
@@ -144,7 +144,7 @@ class DownloadFaces:
                 elif len(line) == 1:
                     print 'Downloading :' + person + ',pic ID :' + str(int(lineNumStr)) + ',volume used: ' + str(volume_used)
                     lineInfo = line[0].split(' ')# 0 == picID, 1 == url, 2,3,4,5 == left,top,right,bottom
-                    result = self.processImage(person, lineInfo[0], lineInfo[1], lineInfo[2], lineInfo[3], lineInfo[4], lineInfo[5])
+                    result = self.processImage(lineNumStr, person, lineInfo[0], lineInfo[1], lineInfo[2], lineInfo[3], lineInfo[4], lineInfo[5])
                     if result == -1:
                         splited = line[0].split(' ')
                         toLog = []
@@ -155,12 +155,7 @@ class DownloadFaces:
                     else:
                         deltaVu += result
 
-            cf = ConfigParser.ConfigParser()
-            cf.read(self.CONFIG_PATH + self.CONFIG_FILE)
-            cf.set('progress','person_file',person)
-            cf.set('progress','pic_ID',int(lineNumStr) + 1)
-            cf.set('progress','volume_used',volume_used + deltaVu)
-            cf.write(open(self.CONFIG_PATH + self.CONFIG_FILE,'w'))            
+                        
 
             if self.stopDownloadFlag == True:
                 personfile.close()
@@ -169,7 +164,7 @@ class DownloadFaces:
         personfile.close()
         return deltaVu
 
-    def processImage(self, person, picID, url, left, top, right, bottom):
+    def processImage(self, lineNumStr, person, picID, url, left, top, right, bottom):
         personName = person.split('.')[0]
         imgType = url.split('.')[-1]
         if not os.path.exists(self.SAVE_PATH + personName):
@@ -182,24 +177,58 @@ class DownloadFaces:
             return -1
         except httplib.BadStatusLine, e:
             print 'caught an httplib error'
-            return -1        
-
-        if img == None:
-            toLog = []
-            toLog.append(person)
-            toLog.append(picID)
-            toLog.append(url)
-            self.logARow(toLog)
-            return 0
-        subImg = img[int(float(top)):int(float(bottom)), int(float(left)):int(float(right))]
-
-        try:
-            cv2.imwrite(self.SAVE_PATH + personName + '/' + str(int(picID)) + '.' + imgType, subImg)
-        except cv2.error, e:
-            print 'caught an image write error..'
             return -1 
-        
-        return img.size
+
+        self.imgQueue.put((img, lineNumStr, personName, imgType, person, picID, url, left, top, right, bottom))
+
+         
+        if img == None:
+            return 0
+        return img.size     
+
+    def saveImage(self):
+        while True:          
+            if not self.imgQueue.empty():
+                print 'getting item..'
+                item = self.imgQueue.get()
+                img, lineNumStr, personName, imgType, person, picID, url, left, top, right, bottom = item
+
+                if img == None:
+                #    self.imgQueue.task_done()
+                    toLog = []
+                    toLog.append(person)
+                    toLog.append(picID)
+                    toLog.append(url)
+                    self.logARow(toLog)
+                    continue
+
+                subImg = img[int(float(top)):int(float(bottom)), int(float(left)):int(float(right))]
+
+                try:
+                    cv2.imwrite(self.SAVE_PATH + personName + '/' + str(int(picID)) + '.' + imgType, subImg)
+                except cv2.error, e:
+                    print 'caught an image write error..'
+                #    self.imgQueue.task_done()
+                    toLog = []
+                    toLog.append(person)
+                    toLog.append(picID)
+                    toLog.append(url)
+                    self.logARow(toLog) 
+                    continue
+
+                print 'save success~'
+                cf = ConfigParser.ConfigParser()
+                cf.read(self.CONFIG_PATH + self.CONFIG_FILE)
+                cf.set('progress','person_file',person)
+                cf.set('progress','pic_ID',int(lineNumStr) + 1)
+                cf.set('progress','volume_used',0)
+                cf.write(open(self.CONFIG_PATH + self.CONFIG_FILE,'w'))
+
+                if self.stopDownloadFlag == True:
+                    thread.exit()
+                
+                #self.imgQueue.task_done()
+                #return img.size
 
     def processCommand(self):
         print 'input exit to stop downloading, input end to quit this program.'
@@ -219,6 +248,7 @@ def main():
     print 'download info: ' + 'person:' + person + ','+ 'picID:' + picID + ',' + 'volume_used:' + volume_used
 
     thread.start_new_thread(df.downloadTread,(person, picID, volume_used))
+    thread.start_new_thread(df.saveImage,())
 
     
     df.processCommand()
